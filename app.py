@@ -1,4 +1,3 @@
-#FOLDER_ID = '1NpdbS6_xXodFID9fvWCHfjlZC1u98ZJb'
 
 import streamlit as st
 import hashlib
@@ -10,6 +9,7 @@ from datetime import datetime
 SECRET_SALT = st.secrets["SECRET_SALT"]
 
 # --- 1. 核心設定區 ---
+SERVICE_ACCOUNT_FILE = 'service_account.json'
 # 請填入您海象專用 Google 帳號雲端硬碟的資料夾 ID
 FOLDER_ID = st.secrets["FOLDER_ID"]
 
@@ -20,14 +20,8 @@ def verify_access(order_id, token):
     return expected_token == token
 
 # --- 2. Google Sheets 工具函式 ---
-#def get_gspread_client():
-#    scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-#    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=scopes)
-#    return gspread.authorize(creds)
-
 def get_gspread_client():
     """從 Streamlit Secrets 讀取憑證並建立連線"""
-    # 直接從 secrets 中抓取剛剛貼上的 [gcp_service_account] 區塊
     creds_info = st.secrets["gcp_service_account"]
     
     scopes = [
@@ -35,7 +29,6 @@ def get_gspread_client():
         'https://www.googleapis.com/auth/drive'
     ]
     
-    # 注意：這裡改用 info 而不是 file
     creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
     return gspread.authorize(creds)
 
@@ -54,8 +47,8 @@ def get_or_create_daily_tab(client):
         return sh.worksheet(today_str)
     except gspread.exceptions.WorksheetNotFound:
         new_ws = sh.add_worksheet(title=today_str, rows="100", cols="20")
-        # [新增] 欄位標題增加「簽收狀態」
-        new_ws.append_row(["回報時間", "送水單號", "簽收狀態", "實際配送桶數", "回收空桶數", "師傅備註"])
+        # [修改] 移除「收現有無」，只保留「收現金額」
+        new_ws.append_row(["回報時間", "送水單號", "收現金額", "簽收狀態", "實際配送桶數", "回收空桶數", "師傅備註"])
         return new_ws
 
 # --- 3. 介面設定 ---
@@ -93,8 +86,18 @@ else:
         
         st.divider()
 
-        # [新增] 簽收狀態按鈕 (水平排列)
-        # 這會以按鈕形式呈現在畫面上，預設為「已簽收」
+        # --- [修改] 收現區塊 (只留金額輸入) ---
+        cash_amount = st.number_input(
+            "收現金額 (若無請填 0)", 
+            min_value=0, 
+            step=100, 
+            value=0,
+            format="%d"
+        )
+
+        st.divider()
+
+        # 簽收狀態按鈕
         delivery_status = st.radio(
             "簽收狀態",
             ["已簽收", "不在家"],
@@ -116,12 +119,26 @@ else:
                 
                 if sheet:
                     report_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    # [修改] 寫入資料列，加入 delivery_status
-                    row_data = [report_time, order_id, delivery_status, actual_qty, empty_qty, note]
+                    
+                    # [修改] 寫入資料列，移除 cash_received
+                    # 對應 header: [時間, 單號, 金額, 狀態, 實送, 回收, 備註]
+                    row_data = [
+                        report_time, 
+                        order_id, 
+                        cash_amount, 
+                        delivery_status, 
+                        actual_qty, 
+                        empty_qty, 
+                        note
+                    ]
                     
                     sheet.append_row(row_data)
                     
-                    st.success(f"✅ 回報成功！狀態：{delivery_status}")
+                    msg = f"✅ 回報成功！狀態：{delivery_status}"
+                    if cash_amount > 0:
+                        msg += f" (💰 收現: ${cash_amount})"
+                    
+                    st.success(msg)
                     st.balloons()
             except Exception as e:
                 st.error(f"❌ 儲存失敗：{str(e)}")
